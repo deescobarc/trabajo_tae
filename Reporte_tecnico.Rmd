@@ -1,0 +1,683 @@
+---
+title: "Reporte Técnico"
+author: "David Escobar y Wilder Castro"
+date: "30/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Predecir la accidentalidad en Medellín
+En este trabajo se abordará el problema de predecir la accidentalidad en la ciudad de Medellín a partir de la historia reciente de los accidentes reportados.
+
+El insumo principal de este trabajo son los [datos abiertos de movilidad](https://geomedellin-m-medellin.opendata.arcgis.com/search?tags=movilidad) que publica la Alcaldía de Medellín en el portal [GeoMedellín](https://www.medellin.gov.co/geomedellin/).
+
+
+
+## 1 - Entrenamiento de un modelo predictivo
+Se deberá construir un modelo que permita predecir la accidentalidad por tipo de accidente a nivel semanal, mensual y diario. Para esto se deberán considerar fechas especiales.
+
+### Entrenamiento y validación
+Los modelos predictivos se deberán construir con los datos de los años 2014, 2015, 2016 y 2017. Se usan los accidentes el año 2018 para validar los modelos.
+
+### A continuación de realiza el entrenamiento del modelo
+
+Se cargan las librerías necesarias 
+```{r}
+library(lubridate)
+library(caret)
+library(data.table)
+library(ggplot2)
+library(dplyr)
+```
+
+Se cargan los datos
+```{r}
+filenames <- list.files(path = "data/fit/")
+datos <- data.table()
+
+i <- 1
+
+for (i in 1:length(filenames)){
+  data <- data.table()
+  data <- as.data.table(fread(paste("data/fit/",filenames[i],sep = ""), header=TRUE))
+  datos <- rbind(datos,data)
+}
+```
+
+
+Los datos se ven así:
+
+```{r}
+head(datos)
+```
+
+Las variables que se van a utilizar en el modelo son:
+
+* FECHA:
+* DIA:
+* PERIODO: 
+* CLASE: 
+* DIA_NOMBRE: 
+* BARRIO:
+* COMUNA:
+* MES:
+
+Lo primero que debe hacerse es un análisis descriptivo de los datos. A continuación se presentan algunas medidas de tendencia central y de dispersión:
+
+```{r}
+datos_fit <- datos[,c("X","Y","OBJECTID", "RADICADO", "HORA", "DIRECCION", "DIRECCION_ENC", "CBML", "TIPO_GEOCOD",   "MES_NOMBRE","Y_MAGNAMED", "X_MAGNAMED", "LONGITUD", "LATITUD", "GRAVEDAD", "DISENO"):=NULL]
+summary(datos_fit)
+```
+
+Se modifica la fecha eliminando los últimos números para que el formato funcione
+```{r}
+datos$FECHA = substr(datos$FECHA,1,10)
+
+head(datos)
+```
+
+Se convierte a formato FECHA el respectivo campo
+
+```{r}
+
+#datos$FECHA = parse_date_time(datos$FECHA,"%Y/%m/%d")
+
+datos$FECHA <- as.Date(datos$FECHA) 
+
+
+head(datos)
+```
+
+
+```{r}
+#Voy a mostrar los de clase choque
+datos_choque <- datos[datos$CLASE == "Choque"]
+ggplot(datos_choque, aes(x=FECHA)) + geom_histogram(binwidth=50, colour="white")
+```
+
+Acá se verifica la cantidad de datos que no tienen comuna ni barrio
+
+```{r}
+sapply(datos_choque, function(x) sum(as.character(x) == ""))
+```
+Se borran los datos sin comuna ni barrio para evitar inconvenientes en los datos
+
+```{r}
+datos_choque <- datos_choque[!datos_choque$BARRIO == "",]
+datos_choque <- datos_choque[!datos_choque$COMUNA == "",]
+sapply(datos_choque, function(x) sum(as.character(x) == ""))
+```
+### Modelo predictivo de accidentalidad diario por Comuna
+## A continuación se realiza la transformación de los datos para realizar el modelo. 
+
+Se agregan las fechas especiales al dataframe, se crea una nueva variable, donde 1 es domingo, 1 es festivo y 0 es día normal
+```{r}
+dias_festivos <- sample(c(0), size = nrow(datos_choque), replace = TRUE)
+datos_choque_con_fest <- cbind(datos_choque,dias_festivos)
+datos_choque_con_fest[datos_choque_con_fest$DIA_NOMBRE %in% c("DOMINGO"), ]$dias_festivos <- 1
+
+festivos <- c(ymd("2014-01-01"), ymd("2014-12-24"), ymd("2014-12-25"), ymd("2014-12-31"),
+              ymd("2015-01-01"), ymd("2015-12-24"), ymd("2015-12-25"), ymd("2015-12-31"),
+              ymd("2016-01-01"), ymd("2016-12-24"), ymd("2016-12-25"), ymd("2016-12-31"),
+              ymd("2017-01-01"), ymd("2017-12-24"), ymd("2017-12-25"), ymd("2017-12-31"))
+
+datos_choque_con_fest[datos_choque_con_fest$FECHA %in% festivos, "dias_festivos"] <- 2 
+
+head(datos_choque_con_fest)
+
+```
+
+
+Se realiza una agrupación por periodo, fecha, dia, barrio, comuna, mes, clase y dia_festivo para conocer la cantidad 
+```{r}
+#freqs <- aggregate(datos_choque$FECHA, by=list(datos_choque$FECHA), FUN=length)
+freqs <- aggregate(datos_choque_con_fest$FECHA, by=list(datos_choque_con_fest$PERIODO, datos_choque_con_fest$FECHA,datos_choque_con_fest$DIA, datos_choque_con_fest$BARRIO, datos_choque_con_fest$COMUNA, datos_choque_con_fest$MES, datos_choque_con_fest$CLASE, datos_choque_con_fest$dias_festivos), FUN=length)
+
+#Se cambian los nombres a las columnas
+names (freqs) = c("Periodo", "Fecha", "Dia", "Barrio", "Comuna", "Mes", "Clase", "Dia_Fest", "Cantidad")
+
+head(freqs)
+```
+
+Se convierten las variables de comuna y barrio en factor y se elimina fecha y clase ya que ya se agrupó
+
+```{r}
+datos_conv <- as.data.frame(unclass(freqs))
+datos_conv$Barrio <- as.numeric(datos_conv$Barrio)
+datos_conv$Comuna <- as.numeric(datos_conv$Comuna)
+datos_conv$Comuna <- as.numeric(datos_conv$Comuna)
+datos_conv$Fecha <- NULL 
+datos_conv$Clase <- NULL 
+
+head(datos_conv)
+
+```
+
+Para el modelamiento se utiliza k vecinos más cercanos, para encontrar el k ideal se utiliza solo el 10% de los datos
+
+```{r}
+n<-dim(datos_conv)[1]
+n_vl<-round(n*0.90)
+set.seed(20190930) # Se fija la semilla para obtener resultados reproducibles
+ix_vl<-sample(1:n,n_vl,replace = FALSE)
+datos_obtener_k <- datos_conv[-ix_vl, c("Dia", "Barrio",  "Comuna", "Mes", "Dia_Fest", "Cantidad")]
+head(datos_obtener_k)
+```
+
+Se procede a encontrar el módelo con mejor K
+
+```{r}
+ctrl<-trainControl(method = "LGOCV",p=0.75, number = 20)
+set.seed(123)
+modelo_entrenamiento<-train(Cantidad ~ Dia+Barrio+Comuna+Mes+Dia_Fest,
+             data       = datos_obtener_k,
+             method     = "knn",
+             preProcess = c("center","scale"),
+             tuneGrid   = expand.grid(k = 1:30),
+             trControl  = ctrl,
+             metric     = "RMSE")
+```
+
+Se verifica el modelo
+```{r}
+print(modelo_entrenamiento)
+plot(modelo_entrenamiento)
+```
+Se vuelve a generar el módelo con K=15 que es adecuado según la gráfica pero con todos los datos
+```{r}
+modelo_entrenamiento2<-train(Cantidad ~ Dia+Barrio+Comuna+Mes+Dia_Fest,
+             data       = datos_conv,
+             method     = "knn",
+             preProcess = c("center","scale"),
+             tuneGrid   = expand.grid(k = 15),
+             metric     = "RMSE")
+```
+
+```{r}
+modelo_entrenamiento2
+```
+
+
+Se prueban los datos de entrenamiento y se obtiene un MSE de 35.68
+
+```{r}
+modelo_entrenamiento2$finalModel
+predicciones_raw <- predict(modelo_entrenamiento2, newdata = datos_conv)
+predicciones_raw <- round(predicciones_raw)
+error_test <- mean(predicciones_raw != datos_conv$Cantidad)
+paste("El error de test del modelo:", round(error_test*100, 2), "%")
+```
+Se generan los datos de validación
+```{r}
+datos_v <- as.data.table(fread("data/validate/Incidentes_georreferenciados_2018.csv", sep = ","), header=TRUE)
+
+datos_val <- datos_v[,c("X","Y","OBJECTID", "RADICADO", "HORA", "DIRECCION", "DIRECCION_ENC", "CBML", "TIPO_GEOCOD",   "MES_NOMBRE","Y_MAGNAMED", "X_MAGNAMED", "LONGITUD", "LATITUD", "GRAVEDAD", "DISENO"):=NULL]
+datos_v$FECHA = substr(datos_v$FECHA,1,10)
+datos_v$FECHA <- as.Date(datos_v$FECHA) 
+datos_choque_v <- datos_v[datos_v$CLASE == "Choque"]
+
+datos_choque_v <- datos_choque_v[!datos_choque_v$BARRIO == "",]
+datos_choque_v <- datos_choque_v[!datos_choque_v$COMUNA == "",]
+
+dias_festivos <- sample(c(0), size = nrow(datos_choque_v), replace = TRUE)
+datos_choque_con_fest_v <- cbind(datos_choque_v,dias_festivos)
+datos_choque_con_fest_v[datos_choque_con_fest_v$DIA_NOMBRE %in% c("DOMINGO"), ]$dias_festivos <- 1
+festivos <- c(ymd("2018-01-01"), ymd("2018-12-24"), ymd("2018-12-25"), ymd("2018-12-31"))
+datos_choque_con_fest_v[datos_choque_con_fest_v$FECHA %in% festivos, "dias_festivos"] <- 2 
+#freqs <- aggregate(datos_choque$FECHA, by=list(datos_choque$FECHA), FUN=length)
+freqs_v <- aggregate(datos_choque_con_fest_v$FECHA, by=list(datos_choque_con_fest_v$PERIODO, datos_choque_con_fest_v$FECHA,datos_choque_con_fest_v$DIA, datos_choque_con_fest_v$BARRIO, datos_choque_con_fest_v$COMUNA, datos_choque_con_fest_v$MES, datos_choque_con_fest_v$CLASE, datos_choque_con_fest_v$dias_festivos), FUN=length)
+
+#Se cambian los nombres a las columnas
+names (freqs_v) = c("Periodo", "Fecha", "Dia", "Barrio", "Comuna", "Mes", "Clase", "Dia_Fest", "Cantidad")
+datos_conv_v <- as.data.frame(unclass(freqs_v))
+datos_conv_v$Barrio <- as.numeric(datos_conv_v$Barrio)
+datos_conv_v$Comuna <- as.numeric(datos_conv_v$Comuna)
+datos_conv_v$Fecha <- NULL 
+datos_conv_v$Clase <- NULL 
+
+head(datos_conv_v)
+
+```
+
+Se hace la prueba con el modelo y los datos de validación y se encuentra el MSE
+
+```{r}
+modelo_entrenamiento2$finalModel
+predicciones_v <- predict(modelo_entrenamiento2, newdata = datos_conv_v)
+predicciones_v <- round(predicciones_v)
+error_test <- mean(predicciones_v != datos_conv_v$Cantidad)
+paste("El error de test del modelo:", round(error_test*100, 2), "%")
+```
+### Se comprueba que la diferencia entre entranamiento y validación es 35.68% - 33.32% que es igual a 2.36% lo que evidencia que no está sobreentrenado
+
+Ahora se generan todas las combinaciones posibles de las variables utilizadas para el año 2020
+```{r}
+#Se hace una multiplicación de columnas entre el periodo 2020 y los diferentes días que existan
+ano <- c('2020')
+dia <- aggregate(datos_conv_v$Dia, by=list(datos_conv_v$Dia), FUN=length)$Group.1
+df <- merge(x = ano, y = dia, by = NULL)
+#Se multiplica lo que se lleva hasta el momento con la agrupación de barrios y su respectiva comuna
+barrio_comuna <- aggregate(datos_conv_v$Barrio, by=list(datos_conv_v$Barrio, datos_conv_v$Comuna), FUN=length)
+barrio_comuna <- cbind(barrio_comuna$Group.1, barrio_comuna$Group.2)
+df <- merge(x = df, y = barrio_comuna, by = NULL)
+#Se multiplica también por los meses del año
+mes <- aggregate(datos_conv_v$Mes, by=list(datos_conv_v$Mes), FUN=length)$Group.1
+df <- merge(x = df, y = mes, by = NULL)
+#Se agregan los días festivos que se han puesto en los otros modelos, que es los domingos y festivos
+dias_festivos <- sample(c(0), size = nrow(df), replace = TRUE)
+df <- cbind(df,dias_festivos)
+names (df) = c("Periodo", "Dia", "Barrio", "Comuna", "Mes", "Dia_Fest")
+df[df$Dia %in% c(30), ]$Dia_Fest <- 1
+festivos <- c(ymd("2018-01-01"), ymd("2018-12-24"), ymd("2018-12-25"), ymd("2018-12-31"))
+df[df$Periodo %in% c("2020") & df$Dia %in% c(10) & df$Mes %in% c(1), ]$Dia_Fest <- 2
+head(df)
+
+
+```
+Se realiza la predicción del 2020
+```{r}
+
+predicciones_nuevas <- predict(modelo_entrenamiento2, newdata = df)
+#predicciones_nuevas <- round(predicciones_nuevas)
+
+```
+
+Se completa la predicción con las otras columnas correspondientes
+```{r}
+data_frame_pred <- cbind(df, predicciones_nuevas)
+fechas<-apply(cbind(2020,data_frame_pred$Mes,data_frame_pred$Dia),1,paste,collapse="-")
+fechas<-as.Date(fechas,"%Y-%m-%d")
+data_frame_pred <- cbind(data_frame_pred, fechas)
+head(data_frame_pred)
+
+```
+
+Se verifica que se pueda graficar, además se agregan los nombres de las comunas
+
+```{r}
+datos_conv_v <- as.data.frame(unclass(freqs_v))
+datos_conv_v$com_num <- as.numeric(datos_conv_v$Comuna)  
+comunas_num <- aggregate(datos_conv_v$com_num, by=list(datos_conv_v$com_num), FUN=length)$Group.1
+comunas_nom <- aggregate(datos_conv_v$Comuna, by=list(datos_conv_v$Comuna), FUN=length)$Group.1
+data_frame_pred$Comuna_nombre <- cut(data_frame_pred$Comuna, breaks = c(comunas_num,23), labels = comunas_nom, right = FALSE)
+
+d <- data_frame_pred %>%
+                filter(Comuna_nombre == "Aranjuez") %>%
+                group_by(fechas) %>% summarise(sum = sum(predicciones_nuevas))
+
+ggplot(data = d,aes(x = fechas, y = sum)) + geom_bar(stat="identity")
+        
+```
+
+
+Se guarda el objeto donde se realizó la predicción para que sea consultado por la aplicación shiny
+
+```{r}
+save(data_frame_pred, file = "Aplicacion/prediccion_diaria.RData")
+```
+
+### Modelo predictivo de accidentalidad semanal por Comuna
+## A continuación se realiza la transformación de los datos para realizar el modelo. 
+
+A partir de la fecha se obtiene la semana del año correspondiente, también se eliminan las filas con barrios y comunas vacías
+```{r}
+datos_choque_sem <- datos_choque
+datos_choque_sem$semana = week(datos_choque_sem$FECHA)
+datos_choque_sem <- datos_choque_sem[!datos_choque_sem$BARRIO == "",]
+datos_choque_sem <- datos_choque_sem[!datos_choque_sem$COMUNA == "",]
+sapply(datos_choque_sem, function(x) sum(as.character(x) == ""))
+```
+Se realiza una agrupación por periodo, periodo - semana, barrio, comuna, mes, clase y semana para conocer la cantidad
+
+```{r}
+#Se agrega una columna con la semana y el periodo para agruparlas juntas
+datos_choque_sem$semana_periodo <- apply(cbind(datos_choque_sem$PERIODO,datos_choque_sem$semana),1,paste,collapse="-")
+
+freq_sem <- aggregate(datos_choque_sem$semana_periodo, by=list(datos_choque_sem$semana_periodo, datos_choque_sem$PERIODO, datos_choque_sem$BARRIO, datos_choque_sem$COMUNA, datos_choque_sem$MES, datos_choque_sem$CLASE, datos_choque_sem$semana), FUN=length)
+
+#Se cambian los nombres a las columnas
+names (freq_sem) = c("Periodo_semana","Periodo", "Barrio", "Comuna", "Mes", "Clase","Semana", "Cantidad")
+head(freq_sem)
+
+```
+
+
+Se convierten las variables de comuna y barrio en factor y se elimina periodo_semana y clase ya que ya se agrupó
+
+```{r}
+datos_conv_sem <- as.data.frame(unclass(freq_sem))
+datos_conv_sem$Barrio <- as.numeric(datos_conv_sem$Barrio)
+datos_conv_sem$Comuna <- as.numeric(datos_conv_sem$Comuna)
+datos_conv_sem$Periodo_semana <- NULL 
+datos_conv_sem$Clase <- NULL 
+head(datos_conv_sem)
+
+```
+
+Para el modelamiento se utiliza k vecinos más cercanos, para encontrar el k ideal, se utiliza solo el 20% de los datos por procesos computacionales
+
+```{r}
+n<-dim(datos_conv_sem)[1]
+n_vl<-round(n*0.80)
+set.seed(20190930) # Se fija la semilla para obtener resultados reproducibles
+ix_vl<-sample(1:n,n_vl,replace = FALSE)
+datos_obtener_k_sem <- datos_conv_sem[-ix_vl, c("Barrio", "Comuna", "Semana", "Cantidad")]
+head(datos_obtener_k_sem)
+```
+
+Se procede a encontrar el módelo con mejor K
+
+```{r}
+ctrl<-trainControl(method = "LGOCV",p=0.75, number = 20)
+set.seed(20190930)
+modelo_entrenamiento_sem<-train(Cantidad ~ Barrio+Comuna+Semana,
+             data       = datos_obtener_k_sem,
+             method     = "knn",
+             preProcess = c("center","scale"),
+             tuneGrid   = expand.grid(k = 1:30),
+             trControl  = ctrl,
+             metric     = "RMSE")
+```
+
+Se verifica el modelo
+```{r}
+print(modelo_entrenamiento_sem)
+plot(modelo_entrenamiento_sem)
+```
+Se vuelve a generar el módelo con K=8 que es adecuado según la gráfica pero con todos los datos
+```{r}
+modelo_entrenamiento2_sem<-train(Cantidad ~ Barrio+Comuna+Semana,
+             data       = datos_conv_sem,
+             method     = "knn",
+             preProcess = c("center","scale"),
+             tuneGrid   = expand.grid(k = 8),
+             metric     = "RMSE")
+```
+
+```{r}
+modelo_entrenamiento2_sem
+```
+Se prueban los datos de entrenamiento y se obtiene un MSE de 67.09 %
+
+```{r}
+modelo_entrenamiento2_sem$finalModel
+predicciones_raw_sem <- predict(modelo_entrenamiento2_sem, newdata = datos_conv_sem)
+predicciones_raw_sem <- round(predicciones_raw_sem)
+error_test <- mean(predicciones_raw_sem != datos_conv_sem$Cantidad)
+paste("El error de test del modelo:", round(error_test*100, 2), "%")
+```
+Se obtienen los datos para validar
+
+```{r}
+datos_choque_v_sem <- datos_choque_v
+#Se agrega una columna con la semana y el periodo para agruparlas juntas
+datos_choque_v_sem$semana = week(datos_choque_v_sem$FECHA)
+datos_choque_v_sem$semana_periodo <- apply(cbind(datos_choque_v_sem$PERIODO,datos_choque_v_sem$semana),1,paste,collapse="-")
+
+freq_sem_v <- aggregate(datos_choque_v_sem$semana_periodo, by=list(datos_choque_v_sem$semana_periodo, datos_choque_v_sem$PERIODO, datos_choque_v_sem$BARRIO, datos_choque_v_sem$COMUNA, datos_choque_v_sem$MES, datos_choque_v_sem$CLASE, datos_choque_v_sem$semana), FUN=length)
+
+#Se cambian los nombres a las columnas
+names (freq_sem_v) = c("Periodo_semana","Periodo", "Barrio", "Comuna", "Mes", "Clase","Semana", "Cantidad")
+
+datos_conv_sem_v <- as.data.frame(unclass(freq_sem_v))
+datos_conv_sem_v$Barrio <- as.numeric(datos_conv_sem_v$Barrio)
+datos_conv_sem_v$Comuna <- as.numeric(datos_conv_sem_v$Comuna)
+datos_conv_sem_v$Periodo_semana <- NULL 
+datos_conv_sem_v$Clase <- NULL 
+head(datos_conv_sem_v)
+
+```
+
+Se hace la prueba con el modelo y los datos de validación y se encuentra el MSE
+
+```{r}
+modelo_entrenamiento2_sem$finalModel
+predicciones_v_sem <- predict(modelo_entrenamiento2_sem, newdata = datos_conv_sem_v)
+predicciones_v_sem <- round(datos_conv_sem_v)
+error_test <- mean(predicciones_v_sem != datos_conv_sem_v$Cantidad)
+paste("El error de test del modelo:", round(error_test*100, 2), "%")
+```
+### Se comprueba que la diferencia entre entrenamiento y validación es  67.09% - 80.8% que es igual a 13.71% lo que evidencia que no está sobreentrenado
+
+Ahora se generan todas las combinaciones posibles de las variables utilizadas para el año 2020
+```{r}
+#Se hace una multiplicación de columnas con el periodo 2020 
+ano <- c('2020')
+semana <- aggregate(datos_conv_sem_v$Semana, by=list(datos_conv_sem_v$Semana, datos_conv_sem_v$Mes), FUN=length)
+semana <- cbind(semana$Group.1, semana$Group.2)
+df <- merge(x = ano, y = semana, by = NULL)
+barrio_comuna <- aggregate(datos_conv_sem_v$Barrio, by=list(datos_conv_sem_v$Barrio, datos_conv_sem_v$Comuna), FUN=length)
+barrio_comuna <- cbind(barrio_comuna$Group.1, barrio_comuna$Group.2)
+df <- merge(x = df, y = barrio_comuna, by = NULL)
+names(df) = c("Periodo", "Semana", "Mes", "Barrio", "Comuna")
+head(df)
+
+```
+Se realiza la predicción del 2020
+```{r}
+
+predicciones_nuevas <- predict(modelo_entrenamiento2_sem, newdata = df)
+
+```
+
+Se completa la predicción con las otras columnas correspondientes
+```{r}
+data_frame_pred_sem <- cbind(df, predicciones_nuevas)
+head(data_frame_pred_sem)
+
+```
+Se verifica que se pueda graficar, además se agregan los nombres de las comunas
+
+```{r}
+datos_conv_v_sem <- as.data.frame(unclass(freq_sem_v))
+datos_conv_v_sem$com_num <- as.numeric(datos_conv_v_sem$Comuna)  
+comunas_num <- aggregate(datos_conv_v_sem$com_num, by=list(datos_conv_v_sem$com_num), FUN=length)$Group.1
+comunas_nom <- aggregate(datos_conv_v_sem$Comuna, by=list(datos_conv_v_sem$Comuna), FUN=length)$Group.1
+data_frame_pred_sem$Comuna_nombre <- cut(data_frame_pred_sem$Comuna, breaks = c(comunas_num,23), labels = comunas_nom, right = FALSE)
+
+d_sem <- data_frame_pred_sem %>%
+                filter(Comuna_nombre == "Aranjuez") %>%
+                group_by(Semana) %>% summarise(sum = sum(predicciones_nuevas))
+
+ggplot(data = d_sem,aes(x = Semana, y = sum)) + geom_bar(stat="identity")
+        
+```
+Se guarda el objeto donde se realizó la predicción para que sea consultado por la aplicación shiny
+
+```{r}
+save(data_frame_pred,data_frame_pred_sem, file = "Aplicacion/prediccion_diaria.RData")
+```
+
+
+### Modelo predictivo de accidentalidad mensual por Comuna
+## A continuación se realiza la transformación de los datos para realizar el modelo. 
+
+Este modelo es más sencillo, ya que el mes es una variable dada en el conjunto de datos, también se eliminan las filas con barrios y comunas vacías
+```{r}
+datos_choque_mes <- datos_choque
+datos_choque_mes <- datos_choque_mes[!datos_choque_mes$BARRIO == "",]
+datos_choque_mes <- datos_choque_mes[!datos_choque_mes$COMUNA == "",]
+sapply(datos_choque_mes, function(x) sum(as.character(x) == ""))
+```
+Se realiza una agrupación por periodo, periodo - mes, barrio, comuna, mes y clase para conocer la cantidad
+
+```{r}
+#Se agrega una columna con mes y el periodo para agruparlas juntas
+datos_choque_mes$mes_periodo <- apply(cbind(datos_choque_mes$PERIODO,datos_choque_mes$MES),1,paste,collapse="-")
+
+freq_mes <- aggregate(datos_choque_mes$mes_periodo, by=list( datos_choque_mes$PERIODO, datos_choque_mes$BARRIO, datos_choque_mes$COMUNA, datos_choque_mes$MES, datos_choque_mes$CLASE), FUN=length)
+
+#Se cambian los nombres a las columnas
+names (freq_mes) = c("Periodo", "Barrio", "Comuna", "Mes", "Clase", "Cantidad")
+head(freq_mes)
+
+```
+
+
+Se convierten las variables de comuna y barrio en factor y se elimina periodo_semana y clase ya que ya se agrupó
+
+```{r}
+datos_conv_mes <- as.data.frame(unclass(freq_mes))
+datos_conv_mes$Barrio <- as.numeric(datos_conv_mes$Barrio)
+datos_conv_mes$Comuna <- as.numeric(datos_conv_mes$Comuna)
+datos_conv_mes$Clase <- NULL 
+head(datos_conv_mes)
+```
+Para el modelamiento se utiliza k vecinos más cercanos, para encontrar el k ideal, se utiliza solo el 40% de los datos por procesos computacionales
+
+```{r}
+n<-dim(datos_conv_mes)[1]
+n_vl<-round(n*0.60)
+set.seed(20190930) # Se fija la semilla para obtener resultados reproducibles
+ix_vl<-sample(1:n,n_vl,replace = FALSE)
+datos_obtener_k_mes <- datos_conv_mes[-ix_vl, c("Barrio", "Comuna", "Mes", "Cantidad")]
+head(datos_obtener_k_mes)
+```
+
+Se procede a encontrar el módelo con mejor K
+
+```{r}
+ctrl<-trainControl(method = "LGOCV",p=0.75, number = 20)
+set.seed(20190930)
+modelo_entrenamiento_mes <-train(Cantidad ~ Barrio+Comuna+Mes,
+             data       = datos_obtener_k_mes,
+             method     = "knn",
+             preProcess = c("center","scale"),
+             tuneGrid   = expand.grid(k = 1:30),
+             trControl  = ctrl,
+             metric     = "RMSE")
+```
+
+Se verifica el modelo
+```{r}
+print(modelo_entrenamiento_mes)
+plot(modelo_entrenamiento_mes)
+```
+
+Se vuelve a generar el módelo con K=11 que es adecuado según la gráfica pero con todos los datos
+```{r}
+modelo_entrenamiento2_mes<-train(Cantidad ~ Barrio+Comuna+Mes,
+             data       = datos_conv_mes,
+             method     = "knn",
+             preProcess = c("center","scale"),
+             tuneGrid   = expand.grid(k = 11),
+             metric     = "RMSE")
+```
+
+```{r}
+modelo_entrenamiento2_mes
+```
+Se prueban los datos de entrenamiento
+
+```{r}
+modelo_entrenamiento2_mes$finalModel
+predicciones_raw_mes <- predict(modelo_entrenamiento2_mes, newdata = datos_conv_mes)
+predicciones_raw_mes <- round(predicciones_raw_mes)
+error_test <- mean(predicciones_raw_mes != datos_conv_mes$Cantidad)
+paste("El error de test del modelo:", round(error_test*100, 2), "%")
+```
+
+Se obtienen los datos para validar
+
+```{r}
+datos_choque_v_mes <- datos_choque_v
+
+#Se agrega una columna con mes y el periodo para agruparlas juntas
+datos_choque_v_mes$mes_periodo <- apply(cbind(datos_choque_v_mes$PERIODO,datos_choque_v_mes$MES),1,paste,collapse="-")
+
+freq_mes_v <- aggregate(datos_choque_v_mes$mes_periodo, by=list( datos_choque_v_mes$PERIODO, datos_choque_v_mes$BARRIO, datos_choque_v_mes$COMUNA, datos_choque_v_mes$MES, datos_choque_v_mes$CLASE), FUN=length)
+
+#Se cambian los nombres a las columnas
+names (freq_mes_v) = c("Periodo", "Barrio", "Comuna", "Mes", "Clase", "Cantidad")
+
+datos_choque_v_mes <- as.data.frame(unclass(freq_mes_v))
+datos_choque_v_mes$Barrio <- as.numeric(datos_choque_v_mes$Barrio)
+datos_choque_v_mes$Comuna <- as.numeric(datos_choque_v_mes$Comuna)
+datos_choque_v_mes$Clase <- NULL 
+
+```
+
+Se hace la prueba con el modelo y los datos de validación y se encuentra el MSE
+
+```{r}
+modelo_entrenamiento2_mes$finalModel
+predicciones_v_mes <- predict(modelo_entrenamiento2_mes, newdata = datos_choque_v_mes)
+predicciones_v_mes <- round(predicciones_v_mes)
+error_test <- mean(predicciones_v_mes != datos_choque_v_mes$Cantidad)
+paste("El error de test del modelo:", round(error_test*100, 2), "%")
+```
+### Se comprueba que la diferencia entre entranamiento y validación es  90.88% - 93.46% que es igual a 2.58% lo que evidencia que no está sobreentrenado
+
+Ahora se generan todas las combinaciones posibles de las variables utilizadas para el año 2020
+```{r}
+#Se hace una multiplicación de columnas con el periodo 2020 
+ano <- c('2020')
+mes <- aggregate(datos_choque_v_mes$Mes, by=list(datos_choque_v_mes$Mes), FUN=length)$Group.1
+df <- merge(x = ano, y = mes, by = NULL)
+barrio_comuna <- aggregate(datos_choque_v_mes$Barrio, by=list(datos_choque_v_mes$Barrio, datos_choque_v_mes$Comuna), FUN=length)
+barrio_comuna <- cbind(barrio_comuna$Group.1, barrio_comuna$Group.2)
+df <- merge(x = df, y = barrio_comuna, by = NULL)
+names(df) = c("Periodo", "Mes", "Barrio", "Comuna")
+head(df)
+```
+Se realiza la predicción del 2020
+```{r}
+
+predicciones_nuevas <- predict(modelo_entrenamiento2_mes, newdata = df)
+
+```
+
+Se completa la predicción con las otras columnas correspondientes
+```{r}
+data_frame_pred_mes <- cbind(df, predicciones_nuevas)
+head(data_frame_pred_mes)
+
+```
+Se verifica que se pueda graficar, además se agregan los nombres de las comunas
+
+```{r}
+datos_conv_v_mes <- as.data.frame(unclass(freq_sem_v))
+datos_conv_v_mes$com_num <- as.numeric(datos_conv_v_mes$Comuna)  
+comunas_num <- aggregate(datos_conv_v_mes$com_num, by=list(datos_conv_v_mes$com_num), FUN=length)$Group.1
+comunas_nom <- aggregate(datos_conv_v_mes$Comuna, by=list(datos_conv_v_mes$Comuna), FUN=length)$Group.1
+data_frame_pred_mes$Comuna_nombre <- cut(data_frame_pred_mes$Comuna, breaks = c(comunas_num,23), labels = comunas_nom, right = FALSE)
+
+d_mes <- data_frame_pred_mes %>%
+                filter(Comuna_nombre == "Aranjuez") %>%
+                group_by(Mes) %>% summarise(sum = sum(predicciones_nuevas))
+
+ggplot(data = d_mes,aes(x = Mes, y = sum)) + geom_bar(stat="identity") + scale_x_continuous(breaks=c(1,2,3,4,5,6,7,8,9,10,11,12))
+        
+```
+Se guarda el objeto donde se realizó la predicción para que sea consultado por la aplicación shiny
+
+```{r}
+save(data_frame_pred,data_frame_pred_sem,data_frame_pred_mes, file = "Aplicacion/prediccion_diaria.RData")
+```
+
+
+
+## Referencias
+
+
+* https://www.diegocalvo.es/analisis-de-series-temporales-en-r-arima/
+* https://rpubs.com/palominoM/series
+* https://stat.ethz.ch/pipermail/r-help-es/2009-November/000433.html
+* https://www.diegocalvo.es/manipulacion-datos-r-forma-simple/
+* https://www.iteramos.com/pregunta/51161/la-comprension-de-las-fechas-y-el-trazado-de-un-histograma-con-ggplot2-en-r
+* https://es.r4ds.hadley.nz/fechas-y-horas.html
+* https://www.institutomora.edu.mx/testU/SitePages/martinpaladino/series_de_tiempo_con_R.html#agregar-series-de-tiempo-en-anos-semestres-trimestres.
+* http://estadistica-dma.ulpgc.es/cursoR4ULPGC/14-seriesTemporales.html
+* https://www.earthdatascience.org/courses/earth-analytics/time-series-data/date-class-in-r/
+* http://www.scielo.org.co/pdf/dyna/v78n165/a30v78n165.pdf
+* https://www.r-bloggers.com/2018/07/how-to-aggregate-data-in-r/
+* https://rpubs.com/Rortizdu/140158
+* https://biocosas.github.io/R/020_gestion_datos.html
+* https://bookdown.org/content/2274/metodos-de-clasificacion.html#algoritmo-k-vecinos-mas-cercanos
+* https://es.quora.com/C%C3%B3mo-puedo-eliminar-variables-columnas-en-RStudio
+* https://danielredondo.com/posts/20200219_calendario_laboral/
+* https://topepo.github.io/caret/model-training-and-tuning.html
+* https://dataaspirant.com/knn-implementation-r-using-caret-package/

@@ -1,0 +1,362 @@
+#Cargando librerias necesarias
+library(shiny)
+library(shinydashboardPlus)
+library(shinydashboard)
+library(DT)
+library(leaflet)
+library(tidyverse)
+library(dplyr)
+
+#Se cargan los datos
+
+load('datos.RData')
+load('prediccion_diaria.RData')
+
+#Definiendo menu de inicio
+ui <- dashboardPagePlus(skin="green",
+                        dashboardHeaderPlus(title="Menu principal",titleWidth = 250, fixed = TRUE),
+                        dashboardSidebar(width = 250,
+                                         sidebarMenu(style="position:fixed; overflow:visible",
+                                                     menuItem(("Inicio"), tabName = "inicio", icon = icon("home")),
+                                                     menuItem("Visualización", tabName = "visualización", icon = icon("th")),
+                                                     menuItem("Predicción", tabName = "prediccion", icon = icon("angle-double-right")),
+                                                     menuItem("Agrupamiento", tabName = "agrupamiento", icon = icon("map-marked")),
+                                                     menuItem("Creditos", tabName = "creditos", icon = icon("hands-helping"))
+                                         )
+                        ),
+                        dashboardBody(
+                          tabItems(
+                            
+                            #Boton inicio
+                            tabItem(tabName = "inicio",
+                                    br(),
+                                    h1("Accidentalidad en Medellín",align="center",style="color:#1C762F"),
+                                    br(),
+                                    br(),
+                                    p("Esta aplicación web tiene como finalidad poder visualizar y analizar con mas facilidad los datos de accidentalidad
+                                      de la ciudad de Medellín ocurridos entre 2014 y 2018, por lo cual se utilizó la información de ", a(href="https://geomedellin-m-medellin.opendata.arcgis.com/search?tags=movilidad", "Datos abiertos de movilidad"),
+                                      "que pública la alcaldía de Medellín.",style = "font-family: 'times'; font-size:18pt; margin-left: 3em; margin-right: 3em;text-align: justify"),
+                                    br(),
+                                    p("En esta aplicacioón usted encontrará tres modulos funcionales donde podrá:",style = "font-family: 'times'; font-size:18pt; margin-left: 3em; margin-right: 3em;text-align: justify"),
+                                    br(),
+                                    tags$ul(
+                                      tags$li(p("Visualizar los datos historicos de accidentalidad en la ciudad de Medellín entre los años 2014 y 2018 por 
+                                                tipo de accidente (atropello, caida de ocupante, choque, incendio, volcamiento, otro), donde usted podrá elegir el periodo de su interes.",style = "font-family: 'times'; font-size:18pt;text-align: justify;margin-right: 1.5em"),style = "margin-left: 3em;margin-right: 3em;text-align: justify"),
+                                      tags$li(p("Visualizar una gráfica de prediccion para el tipo de accidente Choque, donde usted podrá definir una ventana temporal y visualizar los datos predichos para dicho periodo.",style = "font-family: 'times'; font-size:18pt;text-align: justify;margin-right: 1.5em"),style = "margin-left: 3em;margin-right: 3em;text-align: justify"),
+                                      tags$li(p("Usted podrá visualizar un mapa de la ciudad de Medellín, con los accidentes presentados por cada barrio, los datos aqui presentados se encientran agrupados según criterios definidos en dicho módulo.",style = "font-family: 'times'; font-size:18pt;text-align: justify;margin-right: 1.5em"),style = "margin-left: 3em;margin-right: 3em;text-align: justify")
+                                      )
+                            ),
+                            
+                            #Boton visualizacion
+                            tabItem(tabName = "visualización",
+                                    br(),
+                                    h1("Visualización de datos históricos",align="center",style="color:#1C762F"),
+                                    br(),
+                                    div(align="center",
+                                        # Select type of trend to plot
+                                        selectInput(inputId = "type", label = strong("Seleccione el tipo de accidente desea visualizar"),
+                                                    choices = unique(datos$CLASE),
+                                                    selected = "Choque"),
+                                        
+                                        selectInput(inputId = "comuna", label = strong("Seleccione la comuna que desea visualizar"),
+                                                    choices = unique(datos$COMUNA),
+                                                    selected = "--"),
+                                        
+                                        # Select date range to be plotted
+                                        dateRangeInput("date", strong("Seleccione la ventana de tiempo"), start = "2014-01-01", end = "2014-12-31",
+                                                       min = "2014-01-01", max = "2018-12-31"),
+                                        
+                                        h2("Mapa histórico",align="center",style="color:#1C762F"),
+                                        leafletOutput("result",height = 400, width = 750)
+                                    ),
+                                    br(),
+                                    fluidRow(
+                                      box(title="Total solo daños",width=4,background = "green",
+                                          h3(textOutput("total")),align="center"),
+                                      box(title="Total heridos",width=4,background = "orange",
+                                          h3(textOutput("heridos")),align="center"),
+                                      box(title="Total muertes",width=4,background = "black",
+                                          h3(textOutput("muertes")),align="center")
+                                    ),
+                                    br(),
+                                    h2(actionButton("ver","VISUALIZAR DETALLE BARRIOS",icon("table"), style="background-color:#2A68CF; color:#FFFFFF"), align="center"),
+                                    dataTableOutput('barrios')
+                            ),
+                            
+                            #Boton prediccion
+                            tabItem(tabName = "prediccion",
+                                    br(),
+                                    h1("Predicción de la accidentalidad en Medellín para el año 2020",align="center",style="color:#1C762F"),
+                                    br(),
+                                    sidebarLayout(
+                                      sidebarPanel(
+                                        dateRangeInput(inputId = "rango", label = "Seleccione fecha", format = "yyyy-mm-dd", start = "2020-01-01", end = "2020-01-31", min = "2020-01-01", max = "2020-12-31"),
+                                        selectInput("select_comuna", label = "Seleccione una comuna", 
+                                                    choices = list("Aranjuez" = "Aranjuez", 
+                                                                   "Belén" = "Belén",
+                                                                   "Buenos Aires" = "Buenos Aires", 
+                                                                   "Castilla" = "Castilla",
+                                                                   "Corregimiento de Altavista" = "Corregimiento de Altavista",
+                                                                   "Corregimiento de San Antonio de Prado" = "Corregimiento de San Antonio de Prado",
+                                                                   "Corregimiento de San Cristóbal" = "Corregimiento de San Cristóbal",
+                                                                   "Corregimiento de Santa Elena" = "Corregimiento de Santa Elena",
+                                                                   "Doce de Octubre" = "Doce de Octubre",
+                                                                   "El Poblado" = "El Poblado",
+                                                                   "Guayabal" = "Guayabal",
+                                                                   "La América" = "La América",
+                                                                   "La Candelaria" = "La Candelaria",
+                                                                   "Laureles Estadio" = "Laureles Estadio", 
+                                                                   "Manrique" = "Manrique",
+                                                                   "Popular" = "Popular",
+                                                                   "Robledo" = "Robledo",
+                                                                   "San Javier" = "San Javier",
+                                                                   "Santa Cruz" = "Santa Cruz",
+                                                                   "Villa Hermosa" = "Villa Hermosa"
+                                                    ), selected = "Robledo")
+                                      ),
+                                      
+                                      # Show a plot of the generated distribution
+                                      mainPanel(
+                                        h3("Modelo día"),
+                                        p('A continuación se muestra la predicción diaria de accidentes de clase choque. A la izquierda puede seleccionar el rango de fechas y la comuna que desee predecir y de forma dinámica se actualizará el gráfico de accidentalidad para el año 2020.'),
+                                        plotOutput("diario")
+                                      )
+                                    ),
+                                    sidebarLayout(
+                                      sidebarPanel(
+                                        sliderInput("slider_sem", label = "Seleccionar rango de semanas", min = 0, 
+                                                    max = 52, value = c(20, 30)),
+                                        selectInput("select_comuna_sem", label = "Seleccione una comuna", 
+                                                    choices = list("Aranjuez" = "Aranjuez", 
+                                                                     "Belén" = "Belén",
+                                                                     "Buenos Aires" = "Buenos Aires", 
+                                                                     "Castilla" = "Castilla",
+                                                                     "Corregimiento de Altavista" = "Corregimiento de Altavista",
+                                                                     "Corregimiento de San Antonio de Prado" = "Corregimiento de San Antonio de Prado",
+                                                                     "Corregimiento de San Cristóbal" = "Corregimiento de San Cristóbal",
+                                                                     "Corregimiento de Santa Elena" = "Corregimiento de Santa Elena",
+                                                                     "Doce de Octubre" = "Doce de Octubre",
+                                                                     "El Poblado" = "El Poblado",
+                                                                     "Guayabal" = "Guayabal",
+                                                                     "La América" = "La América",
+                                                                     "La Candelaria" = "La Candelaria",
+                                                                     "Laureles Estadio" = "Laureles Estadio", 
+                                                                     "Manrique" = "Manrique",
+                                                                     "Popular" = "Popular",
+                                                                     "Robledo" = "Robledo",
+                                                                     "San Javier" = "San Javier",
+                                                                     "Santa Cruz" = "Santa Cruz",
+                                                                     "Villa Hermosa" = "Villa Hermosa"
+                                                    ), selected = "Robledo")
+                                      ),
+                                      
+                                      # Show a plot of the generated distribution
+                                      mainPanel(
+                                        h3("Modelo semana"),
+                                        p('A continuación se muestra la predicción semanal de accidentes de clase choque. A la izquierda puede seleccionar el rango de semanas y la comuna que desee predecir y de forma dinámica se actualizará el gráfico de accidentalidad para el año 2020.'),
+                                        plotOutput("semanal")
+                                      )
+                                    ),
+                                    sidebarLayout(
+                                      sidebarPanel(
+                                        sliderInput("slider_mes", label = "Seleccionar rango de meses", min = 1, 
+                                                    max = 12, value = c(1, 12)),
+                                        selectInput("select_comuna_mes", label = "Seleccione una comuna", 
+                                                    choices = list("Aranjuez" = "Aranjuez", 
+                                                                   "Belén" = "Belén",
+                                                                   "Buenos Aires" = "Buenos Aires", 
+                                                                   "Castilla" = "Castilla",
+                                                                   "Corregimiento de Altavista" = "Corregimiento de Altavista",
+                                                                   "Corregimiento de San Antonio de Prado" = "Corregimiento de San Antonio de Prado",
+                                                                   "Corregimiento de San Cristóbal" = "Corregimiento de San Cristóbal",
+                                                                   "Corregimiento de Santa Elena" = "Corregimiento de Santa Elena",
+                                                                   "Doce de Octubre" = "Doce de Octubre",
+                                                                   "El Poblado" = "El Poblado",
+                                                                   "Guayabal" = "Guayabal",
+                                                                   "La América" = "La América",
+                                                                   "La Candelaria" = "La Candelaria",
+                                                                   "Laureles Estadio" = "Laureles Estadio", 
+                                                                   "Manrique" = "Manrique",
+                                                                   "Popular" = "Popular",
+                                                                   "Robledo" = "Robledo",
+                                                                   "San Javier" = "San Javier",
+                                                                   "Santa Cruz" = "Santa Cruz",
+                                                                   "Villa Hermosa" = "Villa Hermosa"
+                                                    ), selected = "Robledo")
+                                      ),
+                                      
+                                      # Show a plot of the generated distribution
+                                      mainPanel(
+                                        h3("Modelo mensual"),
+                                        p('A continuación se muestra la predicción mensual de accidentes de clase choque. A la izquierda puede seleccionar el rango de meses y la comuna que desee predecir y de forma dinámica se actualizará el gráfico de accidentalidad para el año 2020.'),
+                                        plotOutput("mensual")
+                                      )
+                                    )
+                            ),
+                            
+                            
+                            tabItem(tabName = "agrupamiento",
+                                    br(),
+                                    h1("Predicción de la accidentalidad en Medellín para el año 2020",align="center",style="color:#1C762F"),
+                                    fluidRow(
+                                      box(
+                                        h3("Descripción del agrupamiento",align="center",style="color:#1C762F"),
+                                        br(),
+                                        fluidRow(
+                                          box(h4("GRUPO 1",style="color:#1C762F"),
+                                              p("Barrios con alta accidentalidad y alta probabilidad de lesiónes (heridas, muerte).",style = "font-family: 'times'; font-size:14pt")),
+                                          box(h4("GRUPO 2",style="color:#1C762F"),
+                                              p("Barrios con alta accidentalidad y baja probabilidad de lesiónes (heridas, muerte).",style = "font-family: 'times'; font-size:14pt"))),
+                                        br(),
+                                        fluidRow(
+                                          box(h4("GRUPO 3",style="color:#1C762F"),
+                                              p("Barrios con baja accidentalidad y alta probabilidad de lesiónes (heridas, muerte).",style = "font-family: 'times'; font-size:14pt")),
+                                          box(h4("GRUPO 4",style="color:#1C762F"),
+                                              p("Barrios con baja accidentalidad y baja probabilidad de lesiónes (heridas, muerte).",style = "font-family: 'times'; font-size:14pt")))
+                                      ),
+                                      box(
+                                        leafletOutput("grupos",height = 500, width = 500)
+                                      )
+                                    )
+                            ),
+                            
+                            #Boton creditos
+                            tabItem(tabName = "creditos",
+                                    br(),
+                                    h1("Creditos",align="center",style="color:#1C762F"),
+                                    br(),
+                                    h3("Proyecto elaborado por:",align="center",style="color:#000000"),
+                                    br(),
+                                    fluidRow(
+                                      box(p("Wilder Camilo Castro Ramos",style = "font-family: 'times'; font-size:18pt;text-align: center"),
+                                          p("Ingeniería de sistemas",style = "font-family: 'times'; font-size:18pt;text-align: center"),
+                                          p("wccastror@unal.edu.co",style = "font-family: 'times'; font-size:18pt;text-align: center")),
+                                      box(p("David Esteban Escobar Castro",style = "font-family: 'times'; font-size:18pt;text-align: center"),
+                                          p("Ingeniería de sistemas",style = "font-family: 'times'; font-size:18pt;text-align: center"),
+                                          p("deescobarc@unal.edu.co",style = "font-family: 'times'; font-size:18pt;text-align: center"))
+                                    ),
+                                    br(),
+                                    h3("Técnicas de aprendizaje estadístico",align="center",style="color:#000000"),
+                                    h3("Universidad Nacional de Colombia",align="center",style="color:#000000"),
+                                    h3("Sede Medellín",align="center",style="color:#000000"),
+                                    h3("2020",align="center",style="color:#000000")
+                            )
+                            )
+                          )
+                        )
+
+
+
+#Definiendo logica server
+server <- function(input, output) {
+  v <- reactiveValues(datos1=NULL)
+  
+  #Definiedo el mapa de visualizacion
+  output$result <- renderLeaflet({
+    datos1 <- subset(datos, CLASE==input$type & FECHA <= input$date & COMUNA==input$comuna)
+    
+    #Funcion de color para mapa de visualizacion
+    getColor <- function(datos1){
+      sapply(datos1$GRAVEDAD, function(GRAVEDAD){
+        if(GRAVEDAD=='MUERTO'){
+          "black"
+        } else if(GRAVEDAD=='HERIDO'){
+          "orange"
+        } else{
+          "green"
+        }
+      }
+      )
+    }
+    
+    #Graficando mapa
+    leaflet() %>%
+      addTiles() %>%
+      addCircleMarkers(lng=datos1$X,lat =datos1$Y, label=datos1$BARRIO, color=getColor(datos1),radius = 5,opacity = 1, fillOpacity = 0.1)
+  })
+  output$total <- renderText({
+    datos1 <- subset(datos, CLASE==input$type & FECHA <= input$date & COMUNA==input$comuna)
+    sum(datos1$GRAVEDAD=='SOLO DAÑOS')
+  })
+  
+  #Definiendo datos para la tabla de barrios
+  output$heridos <- renderText({
+    datos1 <- subset(datos, CLASE==input$type & FECHA <= input$date & COMUNA==input$comuna)
+    sum(datos1$GRAVEDAD=='HERIDO')
+  })
+  output$muertes <- renderText({
+    datos1 <- subset(datos, CLASE==input$type & FECHA <= input$date & COMUNA==input$comuna)
+    sum(datos1$GRAVEDAD=='MUERTO')
+  })
+  observeEvent(input$ver, {
+    v$datos1 <-  datos %>%
+      filter(datos$CLASE==input$type & datos$FECHA <= input$date & datos$COMUNA==input$comuna)%>%
+      count(BARRIO,GRAVEDAD, name = "CANTIDAD")
+  }) 
+  output$barrios <- renderDT(v$datos1)
+  
+  #Mapa de agrupamiento
+  output$grupos <- renderLeaflet({
+    leaflet(datosBase) %>%
+      addTiles() %>%
+      addCircleMarkers(lng = datosBase$X,lat = datosBase$Y, label=datosBase$BARRIO, labelOptions = labelOptions(noHide = F), color = "black", fillColor= ~pal(datosBase$GRUPO),radius = 8,opacity = 2, fillOpacity = 1, 
+                       popup =paste0("<strong>Barrio: </strong>",
+                                     datosBase$BARRIO,
+                                     "<br>",
+                                     "<strong>Comuna: </strong>",
+                                     datosBase$COMUNA,
+                                     "<br>",
+                                     "<strong>Grupo: </strong>",
+                                     datosBase$GRUPO,
+                                     "<br>",
+                                     "<strong>Promedio accidentes por mes: </strong>",
+                                     round((datosBase$TOTAL_ACCIDENTES1)/60,1),
+                                     "<br>",
+                                     "<strong>Promedio heridos por mes: </strong>",
+                                     round(datosBase$PROMEDIO_HERIDOS_X_MES,1),
+                                     "<br>",
+                                     "<strong>Promedio muertes por mes: </strong>",
+                                     round(datosBase$PROMEDIO_MUERTES_X_MES,1),
+                                     "<br>",
+                                     "<strong>% Lesionado: </strong>",
+                                     round((datosBase$TOTAL_ACCIDENTES/datosBase$TOTAL_ACCIDENTES1)*100,1),
+                                     "<b> %</b>"
+                       ))%>%
+      addLegend("bottomright", pal=pal, values=datosBase$GRUPO,
+                title="Grupos")
+  })
+  output$diario <- renderPlot({
+    d <- data_frame_pred %>%
+      filter(fechas >= input$rango[1], fechas <= input$rango[2], Comuna_nombre == input$select_comuna) %>%
+      group_by(fechas) %>% summarise(sum = sum(predicciones_nuevas))
+    
+    ggplot(data = d,aes(x = fechas, y = sum)) + geom_bar(stat="identity", position="dodge") + xlab("Fechas seleccionadas") + ylab ("Cantidad de Accidentes") + ggtitle(paste("Accidentalidad predecida para la comuna",input$select_comuna,"por día" )) + theme (plot.title = element_text(size=rel(1), #Tamaño relativo de la letra del título
+                                                                                                                                                                                                                                                                                           vjust=2, #Justificación vertical, para separarlo del gráfico
+                                                                                                                                                                                                                                                                                           face="bold", #Letra negrilla. Otras posibilidades "plain", "italic", "bold" y "bold.italic"
+                                                                                                                                                                                                                                                                                           lineheight=1.5)) + scale_x_date(date_minor_breaks = "1 day")
+  })
+  output$semanal <- renderPlot({
+    d <- data_frame_pred_sem %>%
+      filter(Semana >= input$slider_sem[1], Semana <= input$slider_sem[2], Comuna_nombre == input$select_comuna_sem) %>%
+      group_by(Semana) %>% summarise(sum = sum(predicciones_nuevas))
+    
+    ggplot(data = d,aes(x = Semana, y = sum)) + geom_bar(stat="identity", position="dodge") + xlab("Semanas seleccionadas") + ylab ("Cantidad de Accidentes") + ggtitle(paste("Accidentalidad predecida para la comuna",input$select_comuna_sem,"por semana" )) + theme (plot.title = element_text(size=rel(1), #Tamaño relativo de la letra del título
+                                                                                                                                                                                                                                                                                                   vjust=2, #Justificación vertical, para separarlo del gráfico
+                                                                                                                                                                                                                                                                                                   face="bold", #Letra negrilla. Otras posibilidades "plain", "italic", "bold" y "bold.italic"
+                                                                                                                                                                                                                                                                                                   lineheight=1.5))
+  })
+  output$mensual <- renderPlot({
+    d <- data_frame_pred_mes %>%
+      filter(Mes >= input$slider_mes[1], Mes <= input$slider_mes[2], Comuna_nombre == input$select_comuna_mes) %>%
+      group_by(Mes) %>% summarise(sum = sum(predicciones_nuevas))
+    
+    ggplot(data = d,aes(x = Mes, y = sum)) + geom_bar(stat="identity", position="dodge") + xlab("Meses seleccionados") + ylab ("Cantidad de Accidentes") + ggtitle(paste("Accidentalidad predecida para la comuna",input$select_comuna_sem,"por mes" )) + theme (plot.title = element_text(size=rel(1), #Tamaño relativo de la letra del título
+                                                                                                                                                                                                                                                                                           vjust=2, #Justificación vertical, para separarlo del gráfico
+                                                                                                                                                                                                                                                                                           face="bold", #Letra negrilla. Otras posibilidades "plain", "italic", "bold" y "bold.italic"
+                                                                                                                                                                                                                                                                                           lineheight=1.5)) + scale_x_continuous(breaks=c(1,2,3,4,5,6,7,8,9,10,11,12))
+  })
+}
+
+# Run the application 
+shinyApp(ui = ui, server = server)
+

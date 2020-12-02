@@ -1,0 +1,12 @@
+name: Accidentalidad
+title: Accidentalidad
+username:
+account: wildcast
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 3333213
+bundleId: 3929712
+url: https://wildcast.shinyapps.io/Accidentalidad/
+when: 1606858799.80748
+asMultiple: FALSE
+asStatic: FALSE
